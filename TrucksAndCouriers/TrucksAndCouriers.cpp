@@ -10,7 +10,9 @@
 #include <numeric>
 #include <algorithm>
 #include <random>
-#include<sstream>
+#include <sstream>
+#include <limits>
+
 
 using namespace std;
 
@@ -70,7 +72,7 @@ struct TruckDelivery
     int wx;
     int wy;
     int cost;
-    int gready_cost;
+    int r;
     vector< Customer > customers;
 };
 
@@ -89,6 +91,7 @@ public:
     }
 
 public:
+    // warehouse key vs quantity
     map< int, int > whs;
 };
 
@@ -109,7 +112,44 @@ public:
     }
 
 private:
+    // by item
     map< int, ItemRecord > items;
+};
+
+//class CustomerRecord
+//{
+//public:
+//    CustomerRecord() {};
+//    void addCustomer( Customer & c )
+//    {
+//        int k = getWhKey( c.x, c.y );
+//        customers
+//    }
+//public:
+//    map< int, Customer > customers;
+//};
+
+class CustomerMap
+{
+public:
+    CustomerMap() {};
+    void addCustomer( Customer & c )
+    {
+        customers[ c.it ].push_back( c );
+    }
+
+    void addCustomer( int x, int y, int it )
+    {
+        customers[ it ].push_back( Customer( x, y, it ) );
+    }
+
+    vector< Customer >& operator[]( int i )
+    {
+        return customers[ i ];
+    }
+private:
+    // by item
+    map< int, vector< Customer > > customers;
 };
 
 class Warehouse
@@ -132,7 +172,23 @@ public:
         return items[ i ];
     }
 
+    map< int, int >::iterator begin()
+    {
+        return items.begin();
+    }
+
+    map< int, int >::iterator end()
+    {
+        return items.end();
+    }
+
+    map< int, int > getMap()
+    {
+        return items;
+    }
+
 private:
+    // itme vs quantity
     map< int, int > items;
 
 public:
@@ -160,8 +216,32 @@ public:
         return whs[ i ];
     }
 
+    map< int, Warehouse >::iterator begin()
+    {
+        return whs.begin();
+    }
+
+    map< int, Warehouse >::iterator end()
+    {
+        return whs.end();
+    }
+
+
 private:
+    // by warehouse key
     map< int, Warehouse > whs;
+};
+
+class blob
+{
+public:
+    blob() {};
+    blob( int x_, int y_, int r_ ) : x { x_ }, y { y_ }, r { r_ }
+    {};
+public:
+    int x;
+    int y;
+    int r;
 };
 
 
@@ -188,8 +268,8 @@ public:
     {
     }
 
-    void createWearhouseItemRecord( vector< int > warehouseX, vector< int > warehouseY,
-        vector< int > warehouseItem, vector< int > warehouseQuantity )
+    void createRecords( vector< int > warehouseX, vector< int > warehouseY,
+        vector< int > warehouseItem, vector< int > warehouseQuantity, vector< int > customerX, vector< int > customerY, vector< int > customerItem )
     {
         size_t n = warehouseX.size();
         for ( size_t i = 0; i < n; ++i )
@@ -197,15 +277,20 @@ public:
             whmap.addItems( warehouseX[ i ], warehouseY[ i ], warehouseItem[ i ], warehouseQuantity[ i ] );
             itmap.addItems( warehouseX[ i ], warehouseY[ i ], warehouseItem[ i ], warehouseQuantity[ i ] );
         }
+
+        n = customerX.size();
+        for ( size_t i = 0; i < n; ++i )
+            cmap.addCustomer( customerX[ i ], customerY[ i ], customerItem[ i ] );
     }
 
-    void createItemCustomerRecord( vector< int > customerX, vector< int > customerY, vector< int > customerItem )
+    /*void createItemCustomerRecord( vector< int > customerX, vector< int > customerY, vector< int > customerItem )
     {
         size_t n = customerX.size();
         for ( size_t i = 0; i < n; ++i )
         {
-            customers.push_back( Customer( customerX[ i ], customerY[ i ], customerItem[ i ] ) );
-            customer_item_map[ getWhKey( customerX[ i ], customerY[ i ] ) ][ customerItem[ i ] ]++;
+            //customers.push_back( Customer( customerX[ i ], customerY[ i ], customerItem[ i ] ) );
+            //customer_item_map[ getWhKey( customerX[ i ], customerY[ i ] ) ][ customerItem[ i ] ]++;
+            cmap.addCustomer( customerX[ i ], customerY[ i ], customerItem[ i ] );
         }
     }
 
@@ -450,30 +535,111 @@ public:
                 }
             }
         }
-    }
+    }*/
 
-    int clcZoneSize( int numOfCustomers )
+    TruckDelivery createTruckDelivery( Warehouse & wh )
     {
-        if ( numOfCustomers > 800 )
-            return 250;
+        vector< Customer > potential_customers;
+        for ( auto & iq : wh )
+            potential_customers.insert( potential_customers.end(), cmap[ iq.first ].begin(), cmap[ iq.first ].end() );
 
-        if ( numOfCustomers > 700 )
-            return 280;
+        int x_min = potential_customers[ 0 ].x;
+        int x_max = potential_customers[ 0 ].x;
+        int y_min = potential_customers[ 0 ].y;
+        int y_max = potential_customers[ 0 ].y;
 
-        if ( numOfCustomers > 600 )
-            return 300;
+        for ( auto & c : potential_customers )
+        {
+            if ( c.x < x_min )
+                x_min = c.x;
 
-        if ( numOfCustomers > 400 )
-            return 350;
+            if ( c.x > x_max )
+                x_max = c.x;
 
-        if ( numOfCustomers > 200 )
-            return 400;
+            if ( c.y < y_min )
+                y_min = c.y;
 
-        if ( numOfCustomers > 100 )
-            return 450;
+            if ( c.y > y_max )
+                y_max = c.y;
+        }
 
-        return 500;
+        blob b( ( x_min + x_max ) / 2, ( y_min + y_max ) / 2, 100 );
+        double cost = numeric_limits<float>::max();
+        std::uniform_int_distribution<> step_dist( 0, 2 );
+
+        double cost_thresh = 500;
+
+        int noChagneThresh = 100;
+        int changeind = 0;
+
+        vector< size_t > blob_idxs;
+
+        while ( changeind < noChagneThresh )
+        {
+            blob new_b = b;
+            int dx = ( step_dist( m_gen ) - 1 ) * 20;
+            if ( ( new_b.x + dx ) >= x_min && ( new_b.x + dx ) < x_max )
+                new_b.x += dx;
+            
+            int dy = ( step_dist( m_gen ) - 1 ) * 20;
+            if ( ( new_b.y + dy ) >= y_min && ( new_b.y + dy ) < y_max )
+                new_b.y += dy;
+
+            int dr = ( step_dist( m_gen ) - 1 ) * 10;
+            if ( ( new_b.r + dr ) >= 50 && ( new_b.r + dr ) < 250 )
+                new_b.r += dr;
+
+            vector< int > distances;
+            for ( auto & c : potential_customers )
+                distances.push_back( abs( new_b.x- c.x ) + abs( new_b.y - c.y ) );
+
+            vector< size_t > idxs = sort_indexes( distances );
+            map< int, int > supply = wh.getMap();
+            double new_cost = tfixed + tvariable * wh.distance( new_b.x, new_b.y );
+            int n = 0;
+            vector< size_t > new_blob_idxs;
+            for ( auto & i : idxs )
+            {
+                if ( distances[ i ] < new_b.r && supply[ potential_customers[ i ].it ] > 0 )
+                {
+                    new_cost += distances[ i ];
+                    supply[ potential_customers[ i ].it ]--;
+                    new_blob_idxs.push_back( i );
+                    n++;
+                }
+            }
+
+            new_cost = new_cost / n;
+
+            double delta = new_cost - cost;
+
+            if ( delta < cost_thresh )
+            {
+                b = new_b;
+                cost = new_cost;
+                blob_idxs = new_blob_idxs;
+                if ( delta < 0 )
+                {
+                    cost_thresh *= 0.5;
+                    changeind = 0;
+                }
+            }
+            changeind++;
+        }
+
+        TruckDelivery delivery;
+        delivery.x = b.x;
+        delivery.y = b.y;
+        delivery.wx = wh.x;
+        delivery.wy = wh.y;
+        delivery.r = b.r;
+        delivery.cost = cost;
+        for ( auto & i : blob_idxs )
+            delivery.customers.push_back( potential_customers[ i ] );
+
+        return delivery;
     }
+
 
     vector< string > planShipping( int truckFixed, int truckVariable, vector< int > warehouseX,
         vector< int > warehouseY, vector< int > warehouseItem, vector< int > warehouseQuantity,
@@ -481,36 +647,11 @@ public:
     {
         tfixed = truckFixed;
         tvariable = truckVariable;
-        createWearhouseItemRecord( warehouseX, warehouseY, warehouseItem, warehouseQuantity );
-        createItemCustomerRecord( customerX, customerY, customerItem );
+        createRecords( warehouseX, warehouseY, warehouseItem, warehouseQuantity, customerX, customerY, customerItem );
 
-        double p0 = 0.4;
-        int i = 0;
-        int since_last_delivery = 0;
-        int zone_size = clcZoneSize( customerItem.size() );
-        while ( since_last_delivery < 50 )
-        {
-            Zone z = randomZone( zone_size );
-            TruckDelivery d = createTruckDelivery( z );
-            if ( d.cost > 0 )
-            {
-                double p = ( d.gready_cost / ( (double)d.cost ) ) - 1 + p0;
-                double u = m_dis_1( m_gen );
-                if ( u <= p )
-                {
-                    makeTruckDelivery( d );
-                    since_last_delivery = 0;
-                }
-            }
-
-            if ( i % 10 == 0 && i > 0 )
-                p0 += 0.02;
-
-            i++;
-            since_last_delivery++;
-        }
-
-        makeGreadyCourierDeliveries();
+        vector< TruckDelivery > tds;
+        for ( auto & wh : whmap )
+            tds.push_back( createTruckDelivery( wh.second ) );
 
         return delivery_log;
     }
@@ -518,7 +659,8 @@ public:
 private:
     WarehouseMap whmap;
     ItemMap itmap;
-    vector< Customer > customers;
+    CustomerMap cmap;
+    //vector< Customer > customers;
     int tfixed;
     int tvariable;
 
@@ -527,7 +669,7 @@ private:
     std::uniform_real_distribution<> m_dis_1;
     vector< string > delivery_log;
 
-    map< int, map< int, int > > customer_item_map;
+    //map< int, map< int, int > > customer_item_map;
 
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -632,10 +774,10 @@ void runTest( istream & is, bool writeToLog = false )
 
 int main()
 {
-    runTest( cin, true );
+    //runTest( cin, true );
 
-    //ifstream infile( "in.txt" );
-    //runTest( infile, false );
+    ifstream infile( "in.txt" );
+    runTest( infile, false );
 }
 
 
