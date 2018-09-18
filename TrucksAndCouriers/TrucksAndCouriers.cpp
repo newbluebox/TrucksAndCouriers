@@ -9,11 +9,11 @@
 #include <map>
 #include <numeric>
 #include <algorithm>
+#include <random>
+#include<sstream>
 
 using namespace std;
 
-ofstream outfile( "out.txt" );
-ofstream logfile( "log.txt" );
 
 int getWhKey( int x, int y )
 {
@@ -56,7 +56,7 @@ std::vector< size_t > sort_indexes( const std::vector< T > & v )
 
 struct Customer
 {
-    Customer() : x{ 0 }, y{ 0 }, it{ -1 } {};
+    Customer() : x { 0 }, y { 0 }, it { -1 } {};
     Customer( int x_, int y_, int it_ ) : x{ x_ }, y{ y_ }, it{ it_ } {};
     int x;
     int y;
@@ -67,7 +67,10 @@ struct TruckDelivery
 {
     int x;
     int y;
+    int wx;
+    int wy;
     int cost;
+    int gready_cost;
     vector< Customer > customers;
 };
 
@@ -80,16 +83,13 @@ public:
         whs[ whsKey ] += quantity;
     }
 
-    //void addCustomerInfo( int x, int y )
-    //{
-    //    cx.push_back( x );
-    //    cy.push_back( y );
-    //}
+    int& operator[] ( int i )
+    {
+        return whs[ i ];
+    }
 
 public:
     map< int, int > whs;
-    //vector< int > cx;
-    //vector< int > cy;
 };
 
 class ItemMap
@@ -103,17 +103,12 @@ public:
         items[ item ].addWhsInfo( k, q );
     }
 
-    //void addCustomer( int x, int y, int item )
-    //{
-    //    items[ item ].addCustomerInfo( x, y );
-    //}
-
     ItemRecord& operator[]( int i )
     {
         return items[ i ];
     }
 
-public:
+private:
     map< int, ItemRecord > items;
 };
 
@@ -127,25 +122,22 @@ public:
         items[ item ] += q;
     }
 
-    bool has( int it )
-    {
-        bool ret = false;
-        if ( items.count( it ) > 0 )
-            if ( items[ it ] > 0 )
-                ret = true;
-
-        return ret;
-    }
-
     int distance( int x_, int y_ )
     {
         return abs( x_ - x ) + abs( y - y_ );
     }
 
+    int& operator[] ( int i )
+    {
+        return items[ i ];
+    }
+
+private:
+    map< int, int > items;
+
 public:
     int x;
     int y;
-    map< int, int > items;
 };
 
 class WarehouseMap
@@ -168,7 +160,7 @@ public:
         return whs[ i ];
     }
 
-public:
+private:
     map< int, Warehouse > whs;
 };
 
@@ -177,10 +169,10 @@ class Zone
 {
 public:
     Zone() {};
-    void addCustomer( int x, int y, int itm )
+    void addCustomer( Customer & c )
     {
-        ci[ itm ].push_back( Customer( x, y, itm ) );
-        demand[ itm ]++;
+        ci[ c.it ].push_back( c );
+        demand[ c.it ]++;
     }
 
 public:
@@ -192,7 +184,7 @@ class TrucksAndCouriers
 {
 public:
     TrucksAndCouriers() :
-        zones( 25, Zone() )
+        m_gen( 42 ), m_point_dist( 0, 1000 ), m_dis_1( 0, 1 )
     {
     }
 
@@ -212,9 +204,8 @@ public:
         size_t n = customerX.size();
         for ( size_t i = 0; i < n; ++i )
         {
-            //itmap.addCustomer( customerX[ i ], customerY[ i ], customerItem[ i ] );
-            int k = getZoneKey( customerX[ i ], customerY[ i ] );
-            zones[ k ].addCustomer( customerX[ i ], customerY[ i ], customerItem[ i ] );
+            customers.push_back( Customer( customerX[ i ], customerY[ i ], customerItem[ i ] ) );
+            customer_item_map[ getWhKey( customerX[ i ], customerY[ i ] ) ][ customerItem[ i ] ]++;
         }
     }
 
@@ -265,34 +256,16 @@ public:
         return delivery;
     }
 
-    void determineSupply( Zone & z )
+    int greadyCost( vector< Customer > & customers )
     {
-        map< int, int > supp_stat;
-        map< int, map< int, int > > supp;
-
-        for ( auto & d : z.demand )
-        {
-            for ( auto & r : itmap[ d.first ].whs )
-            {
-                int q = d.second < r.second ? d.second : r.second;
-                supp_stat[ r.first ] += q;
-                supp[ r.first ][ d.first ] = q;
-            }
-        }
-
-        vector< int > k = sort_by_keys( supp_stat );
-        int whkey = k[ 0 ];
-        TruckDelivery delivery = groupCustomer( supp[ whkey ], z );
-        delivery.cost += ( tfixed + tvariable * ( abs( delivery.x - whmap[ whkey ].x ) + abs( delivery.y - whmap[ whkey ].y ) ) );
-
         map< int, ItemRecord > group_itmap;
 
-        for ( auto & c : delivery.customers )
+        for ( auto & c : customers )
             group_itmap[ c.it ] = itmap[ c.it ];
 
         int gready_cost = 0;
 
-        for ( auto & c : delivery.customers )
+        for ( auto & c : customers )
         {
             int d = 2000;
             int k = -1;
@@ -300,7 +273,7 @@ public:
             {
                 if ( wh.second > 0 )
                 {
-                    int d_ = abs( c.x - whmap[ wh.first ].x ) + abs( c.y - whmap[ wh.first ].y );
+                    int d_ = whmap[ wh.first ].distance( c.x, c.y );
                     if ( d_ < d )
                     {
                         d = d_;
@@ -316,13 +289,190 @@ public:
             }
         }
 
-        int stop = 9;
+        return gready_cost;
     }
 
-    void determineZoneSupplies()
+    TruckDelivery createTruckDelivery( Zone & z )
     {
-        for ( auto & z : zones )
-            determineSupply( z );
+        map< int, int > supp_stat;
+        map< int, map< int, int > > supp;
+
+        for ( auto & d : z.demand )
+        {
+            for ( auto & r : itmap[ d.first ].whs )
+            {
+                int q = d.second < r.second ? d.second : r.second;
+                supp_stat[ r.first ] += q;
+                supp[ r.first ][ d.first ] = q;
+            }
+        }
+        vector< int > k = sort_by_keys( supp_stat );
+        vector< TruckDelivery > deliveries;
+        int j = -1;
+        double thrhld = 1.2;
+        double best_ratio = thrhld;
+        int K = k.size() < 5 ? k.size() : 5;
+        for ( int i = 0; i < K; ++i )
+        {
+            int whkey = k[ i ];
+            TruckDelivery d = groupCustomer( supp[ whkey ], z );
+            d.cost += ( tfixed + tvariable * ( whmap[ whkey ].distance( d.x, d.y ) ) );
+            d.wx = whmap[ whkey ].x;
+            d.wy = whmap[ whkey ].y;
+
+            d.gready_cost = greadyCost( d.customers );
+
+            double ratio = d.gready_cost / ( (double)d.cost );
+            if ( ratio > thrhld )
+                deliveries.push_back( d );
+
+            if ( ratio > best_ratio )
+            {
+                best_ratio = ratio;
+                j = deliveries.size() - 1;
+            }
+        }
+
+        if ( j == -1 )
+            return TruckDelivery();
+
+        return deliveries[ j ];
+    }
+
+    Zone randomZone( int sz )
+    {
+        int x = m_point_dist( m_gen );
+        int y = m_point_dist( m_gen );
+
+        int x_min = 0;
+        int y_min = 0;
+        int x_max = 1000;
+        int y_max = 1000;
+
+        int d = sz / 2;
+
+        if ( x - d >= 0 && x + d <= 1000 )
+        {
+            x_min = x - d;
+            x_max = x + d;
+        }
+        else if ( x - d >= 0 )
+        {
+            x_min = 1000 - sz;
+        }
+        else if ( x + d <= 1000 )
+        {
+            x_max = sz;
+        }
+
+        if ( y - d >= 0 && y + d <= 1000 )
+        {
+            y_min = y - d;
+            y_max = y + d;
+        }
+        else if ( y - d >= 0 )
+        {
+            y_min = 1000 - sz;
+        }
+        else if ( y + d <= 1000 )
+        {
+            y_max = sz;
+        }
+
+        Zone z;
+        for ( auto & c : customers )
+            if ( c.x >= x_min && c.x <= x_max && c.y >= y_min && c.y <= y_max 
+                && customer_item_map[ getWhKey( c.x, c.y ) ][ c.it ] > 0 )
+                z.addCustomer( c );
+
+        return z;
+    }
+
+
+    void makeTruckDelivery( TruckDelivery & d )
+    {
+        stringstream ss;
+        ss << "T," << d.wx << "," << d.wy << "," << d.x << "," << d.y;
+        int whkey = getWhKey( d.wx, d.wy );
+        int dest_whkey = getWhKey( d.x, d.y );
+
+        for ( auto & c : d.customers )
+        {
+            ss << "," << c.it;
+            whmap[ whkey ][ c.it ]--;
+            //whmap.addItems( d.x, d.y, c.it, 1 );
+            itmap[ c.it ][ whkey ]--;
+            //itmap[ c.it ][ dest_whkey ]++;
+        }
+
+        delivery_log.push_back( ss.str() );
+
+        for ( auto & c : d.customers )
+        {
+            ss.clear();
+            ss.str( "" );
+            ss << "C," << d.x << "," << d.y << "," << c.x << "," << c.y << "," << c.it;
+            customer_item_map[ getWhKey( c.x, c.y ) ][ c.it ]--;
+            delivery_log.push_back( ss.str() );
+        }
+    }
+
+    void makeGreadyCourierDeliveries()
+    {
+        stringstream ss;
+        for ( auto & c : customers )
+        {
+            if ( customer_item_map[ getWhKey( c.x, c.y ) ][ c.it ] > 0 )
+            {
+                int d = 2000;
+                int k = -1;
+                for ( auto & wh : itmap[ c.it ].whs )
+                {
+                    if ( wh.second > 0 )
+                    {
+                        int d_ = whmap[ wh.first ].distance( c.x, c.y );
+                        if ( d_ < d )
+                        {
+                            d = d_;
+                            k = wh.first;
+                        }
+                    }
+                }
+
+                if ( k != -1 )
+                {
+                    ss.clear();
+                    ss.str( "" );
+                    ss << "C," << whmap[ k ].x << "," << whmap[ k ].y << "," << c.x << "," << c.y << "," << c.it;
+                    delivery_log.push_back( ss.str() );
+                    customer_item_map[ getWhKey( c.x, c.y ) ][ c.it ]--;
+                    itmap[ c.it ].whs[ k ]--;
+                }
+            }
+        }
+    }
+
+    int clcZoneSize( int numOfCustomers )
+    {
+        if ( numOfCustomers > 800 )
+            return 250;
+
+        if ( numOfCustomers > 700 )
+            return 280;
+
+        if ( numOfCustomers > 600 )
+            return 300;
+
+        if ( numOfCustomers > 400 )
+            return 350;
+
+        if ( numOfCustomers > 200 )
+            return 400;
+
+        if ( numOfCustomers > 100 )
+            return 450;
+
+        return 500;
     }
 
     vector< string > planShipping( int truckFixed, int truckVariable, vector< int > warehouseX,
@@ -334,20 +484,57 @@ public:
         createWearhouseItemRecord( warehouseX, warehouseY, warehouseItem, warehouseQuantity );
         createItemCustomerRecord( customerX, customerY, customerItem );
 
+        double p0 = 0.4;
+        int i = 0;
+        int since_last_delivery = 0;
+        int zone_size = clcZoneSize( customerItem.size() );
+        while ( since_last_delivery < 50 )
+        {
+            Zone z = randomZone( zone_size );
+            TruckDelivery d = createTruckDelivery( z );
+            if ( d.cost > 0 )
+            {
+                double p = ( d.gready_cost / ( (double)d.cost ) ) - 1 + p0;
+                double u = m_dis_1( m_gen );
+                if ( u <= p )
+                {
+                    makeTruckDelivery( d );
+                    since_last_delivery = 0;
+                }
+            }
 
-        determineZoneSupplies();
+            if ( i % 10 == 0 && i > 0 )
+                p0 += 0.02;
 
-        return vector< string >();
+            i++;
+            since_last_delivery++;
+        }
+
+        makeGreadyCourierDeliveries();
+
+        return delivery_log;
     }
 
 private:
     WarehouseMap whmap;
     ItemMap itmap;
-    vector< Zone > zones;
+    vector< Customer > customers;
     int tfixed;
     int tvariable;
+
+    mt19937 m_gen;
+    std::uniform_int_distribution<> m_point_dist;
+    std::uniform_real_distribution<> m_dis_1;
+    vector< string > delivery_log;
+
+    map< int, map< int, int > > customer_item_map;
+
 };
 ///////////////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+ofstream outfile( "out.txt" );
+ofstream logfile( "log.txt" );
+
 template< typename T >
 ostream& operator<<( ostream & os, vector< T > & v )
 {
@@ -420,18 +607,35 @@ void runTest( istream & is, bool writeToLog = false )
     vector< string > ret = sol.planShipping( truckFixed, truckVariable, warehouseX, warehouseY,
         warehouseItem, warehouseQuantity, customerX, customerY, customerItem );
 
-    cout << ret.size();
-    for ( auto & s : ret )
-        cout << s << "\n";
+    cout << ret.size() << endl;
 
+    if ( writeToLog )
+        logfile << ret.size() << endl;
+
+    for ( auto & s : ret )
+    {
+        if ( writeToLog )
+            logfile << s << endl;
+
+        cout << s << endl;
+    }
+
+    cout.flush();
+
+    if ( writeToLog )
+    {
+        logfile << "Finished";
+        logfile.flush();
+    }
 }
+
 
 int main()
 {
-    //runTest( cin, true );
+    runTest( cin, true );
 
-    ifstream infile( "in.txt" );
-    runTest( infile, true );
+    //ifstream infile( "in.txt" );
+    //runTest( infile, false );
 }
 
 
